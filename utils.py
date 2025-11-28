@@ -12,7 +12,7 @@ from urllib.parse import urljoin
 # Setup LLM Client (Adjust base_url if using the course proxy)
 token = os.environ.get("AIPROXY_TOKEN")
 client = OpenAI(
-    base_url="https://aiproxy.sanand.workers.dev/openai/v1", # Course Proxy URL
+    base_url="https://aipipe.org/openrouter/v1",
     api_key=token
 )
 
