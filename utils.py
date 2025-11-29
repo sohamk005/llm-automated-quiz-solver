@@ -43,6 +43,7 @@ def llm_solve(task_text):
     2. Identify the Data Source (links to CSVs, tables on page, etc.).
     3. Write a PYTHON SCRIPT that downloads the data, processes it, and prints the final answer.
     4. The script must define a variable `final_answer` containing the result.
+    5. IMPORTANT: Do NOT use 'requests.post' to submit the answer in your code. Just calculate the value.
     
     IMPORTANT: Return ONLY the python code in a markdown block ```python ... ```.
     Do not add explanations. 
@@ -76,6 +77,26 @@ def execute_generated_code(code):
         print(f"Code Execution Error: {e}")
         return None
 
+def llm_extract_submit_url(task_text):
+    """Asks the LLM to find the submission URL in the text."""
+    # Force fallback to the standard submit URL if the LLM gets confused
+    system_prompt = """
+    Extract the submission URL (starting with https) from the text.
+    It usually ends in '/submit'.
+    If you cannot find a clear submission URL in the text, return exactly:
+    [https://tds-llm-analysis.s-anand.net/submit](https://tds-llm-analysis.s-anand.net/submit)
+    Return ONLY the URL.
+    """
+    
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": task_text}
+        ]
+    )
+    return response.choices[0].message.content.strip()
+
 async def run_quiz_process(email, secret, current_url):
     """
     The main loop: Scrape -> Solve -> Submit -> Check for Next URL
@@ -94,14 +115,7 @@ async def run_quiz_process(email, secret, current_url):
             print(f"Scraping failed: {e}")
             break
 
-        # Step 2: Extract Submission URL (usually standard, but safer to ask LLM or regex)
-        # We assume the submission URL is derived or listed. For now, we scrape.
-        # Let's assume the LLM logic extracts the answer, we need the submit endpoint.
-        # Usually in this course, submit URL is [https://example.com/submit](https://example.com/submit) or parsed from text.
-        
-        # Let's refine the LLM prompt to get the answer DIRECTLY if simple, 
-        # or Code if complex. For this specific project, code execution is safer for data tasks.
-        
+        # Step 2: Solve
         generated_code = llm_solve(page_text)
         answer = execute_generated_code(generated_code)
         
@@ -111,14 +125,8 @@ async def run_quiz_process(email, secret, current_url):
             
         print(f"Derived Answer: {answer}")
 
-        # Step 3: Submit
-        # NOTE: The submission URL is usually found in the text like "Post your answer to..."
-        # We need to extract that URL.
-        submit_url_extraction = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": f"Extract the submission URL (starting with https) from this text: {page_text}. Return ONLY the URL."}]
-        )
-        submit_url = submit_url_extraction.choices[0].message.content.strip()
+        # Step 3: Get Submit URL (With Fallback Logic)
+        submit_url = llm_extract_submit_url(page_text)
 
         payload = {
             "email": email,
@@ -129,19 +137,30 @@ async def run_quiz_process(email, secret, current_url):
 
         async with httpx.AsyncClient() as client_http:
             print(f"Submitting to {submit_url}...")
-            resp = await client_http.post(submit_url, json=payload, timeout=10)
-            result = resp.json()
-            print(f"Submission Result: {result}")
-
-            # Step 4: Check for Chain
-            if result.get("correct"):
-                next_url = result.get("url")
-                if next_url:
-                    current_url = next_url
-                else:
-                    print("Quiz Completed!")
+            try:
+                # Increased timeout to 30s
+                resp = await client_http.post(submit_url, json=payload, timeout=30)
+                
+                # CRASH PROOFING: Check if response is valid JSON
+                try:
+                    result = resp.json()
+                    print(f"Submission Result: {result}")
+                    
+                    # Step 4: Check for Chain
+                    if result.get("correct"):
+                        next_url = result.get("url")
+                        if next_url:
+                            current_url = next_url
+                        else:
+                            print("Quiz Completed!")
+                            break
+                    else:
+                        print("Answer incorrect. Retrying or Stopping.")
+                        break
+                except Exception:
+                    print(f"ERROR: Server returned non-JSON response (Likely wrong URL): {resp.text[:200]}")
                     break
-            else:
-                print("Answer incorrect. Retrying or Stopping.")
-                # You could add logic here to retry with a different model if wrong
+                    
+            except Exception as e:
+                print(f"Submission Request Failed: {e}")
                 break
