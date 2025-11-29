@@ -95,7 +95,11 @@ def llm_extract_submit_url(task_text):
             {"role": "user", "content": task_text}
         ]
     )
-    return response.choices[0].message.content.strip()
+
+    # CLEANUP: Remove markdown brackets if the AI adds them
+    raw_url = response.choices[0].message.content.strip()
+    clean_url = raw_url.replace("[", "").replace("]", "").split("(")[-1].split(")")[0]
+    return clean_url
 
 async def run_quiz_process(email, secret, current_url):
     """
